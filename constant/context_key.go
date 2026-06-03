@@ -19,6 +19,12 @@ const (
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
+	// ContextKeyTokenAutoGroups holds the per-token validated multi-group list
+	// (feat4). When a token's Group is a comma-separated list (e.g. "default,vip"),
+	// auth.go validates each subgroup against the user's usable groups and stores
+	// the result here; the "auto" routing machinery then spans exactly these groups
+	// instead of the global setting.autoGroups. Empty/unset → fall back to global.
+	ContextKeyTokenAutoGroups ContextKey = "token_auto_groups"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
@@ -41,6 +47,12 @@ const (
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"
+	// ContextKeyAutoGroupResolved caches the priority-ordered auto-group list for
+	// the current request AFTER cooldown filtering (see service/auto_group_cooldown.go).
+	// It is computed once and reused across retries so the list stays stable while
+	// the retry machinery indexes into it via ContextKeyAutoGroupIndex — even if a
+	// group enters cooldown midway through this same request.
+	ContextKeyAutoGroupResolved ContextKey = "auto_group_resolved"
 
 	/* user related keys */
 	ContextKeyUserId      ContextKey = "id"

@@ -546,7 +546,14 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	// Phase 1.5: 当前请求者是管理员 → 看全部分组的模型；
+	// 普通用户 → 严格按被查询用户的 user.Group
+	var groups map[string]string
+	if c.GetInt("role") >= common.RoleAdminUser {
+		groups = service.GetAllGroupsForAdmin()
+	} else {
+		groups = service.GetUserUsableGroups(user.Group)
+	}
 	var models []string
 	for group := range groups {
 		for _, g := range model.GetGroupEnabledModels(group) {
@@ -850,7 +857,8 @@ func CreateUser(c *gin.Context) {
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
-		Role:        user.Role, // 保持管理员设置的角色
+		Role:        user.Role,  // 保持管理员设置的角色
+		Group:       user.Group, // 允许管理员创建用户时指定可用分组（逗号分隔）
 	}
 	if err := cleanUser.Insert(0); err != nil {
 		common.ApiError(c, err)

@@ -42,10 +42,12 @@ func GetPricing(c *gin.Context) {
 		groupRatio[s] = f
 	}
 	var group string
+	isAdmin := false
 	if exists {
 		user, err := model.GetUserCache(userId.(int))
 		if err == nil {
 			group = user.Group
+			isAdmin = c.GetInt("role") >= common.RoleAdminUser
 			for g := range groupRatio {
 				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
 				if ok {
@@ -55,7 +57,15 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	usableGroup = service.GetUserUsableGroups(group)
+	// Phase 1.5 严格语义：
+	//   - 管理员 → 看所有分组
+	//   - 普通用户 → 严格按 user.Group 多分组
+	//   - 匿名 → default 分组（公开预览）
+	if isAdmin {
+		usableGroup = service.GetAllGroupsForAdmin()
+	} else {
+		usableGroup = service.GetUserUsableGroups(group)
+	}
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {

@@ -79,7 +79,7 @@ const EditTokenModal = (props) => {
     model_limits_enabled: false,
     model_limits: [],
     allow_ips: '',
-    group: '',
+    group: [],
     cross_group_retry: false,
     tokenCount: 1,
   });
@@ -172,6 +172,15 @@ const EditTokenModal = (props) => {
       data.remain_amount = Number(
         quotaToDisplayAmount(data.remain_quota || 0).toFixed(6),
       );
+      // feat4 多分组令牌：后端用逗号分隔字符串存储，前端转为数组供多选使用
+      if (typeof data.group === 'string') {
+        data.group = data.group
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } else if (!Array.isArray(data.group)) {
+        data.group = [];
+      }
       if (formApiRef.current) {
         formApiRef.current.setValues({ ...getInitValues(), ...data });
       }
@@ -238,6 +247,16 @@ const EditTokenModal = (props) => {
       }
       localInputs.model_limits = localInputs.model_limits.join(',');
       localInputs.model_limits_enabled = localInputs.model_limits.length > 0;
+      // feat4 多分组：多选输出数组，提交时拼回逗号分隔字符串
+      if (Array.isArray(localInputs.group)) {
+        localInputs.group = localInputs.group
+          .map((s) => String(s).trim())
+          .filter(Boolean)
+          .join(',');
+      }
+      if (localInputs.group && localInputs.group.includes(',')) {
+        localInputs.cross_group_retry = true;
+      }
       let res = await API.put(`/api/token/`, {
         ...localInputs,
         id: parseInt(props.editingToken.id),
@@ -282,6 +301,16 @@ const EditTokenModal = (props) => {
         }
         localInputs.model_limits = localInputs.model_limits.join(',');
         localInputs.model_limits_enabled = localInputs.model_limits.length > 0;
+        // feat4 多分组：多选输出数组，提交时拼回逗号分隔字符串
+        if (Array.isArray(localInputs.group)) {
+          localInputs.group = localInputs.group
+            .map((s) => String(s).trim())
+            .filter(Boolean)
+            .join(',');
+        }
+        if (localInputs.group && localInputs.group.includes(',')) {
+          localInputs.cross_group_retry = true;
+        }
         let res = await API.post(`/api/token/`, localInputs);
         const { success, message } = res.data;
         if (success) {
@@ -386,9 +415,12 @@ const EditTokenModal = (props) => {
                     {groups.length > 0 ? (
                       <Form.Select
                         field='group'
-                        label={t('令牌分组')}
-                        placeholder={t('令牌分组，默认为用户的分组')}
+                        label={t('令牌分组（可多选）')}
+                        placeholder={t(
+                          '令牌分组，默认为用户的分组；可多选，多选时一个令牌可跨多个分组取用资源',
+                        )}
                         optionList={groups}
+                        multiple
                         renderOptionItem={renderGroupOption}
                         filter={(input, option) => {
                           const q = input.toLowerCase();
@@ -413,7 +445,13 @@ const EditTokenModal = (props) => {
                   <Col
                     span={24}
                     style={{
-                      display: values.group === 'auto' ? 'block' : 'none',
+                      display: (
+                        Array.isArray(values.group)
+                          ? values.group.includes('auto')
+                          : values.group === 'auto'
+                      )
+                        ? 'block'
+                        : 'none',
                     }}
                   >
                     <Form.Switch

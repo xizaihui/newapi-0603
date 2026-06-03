@@ -193,3 +193,111 @@ export async function adminUnbindCustomOAuth(
   )
   return res.data
 }
+
+// ============================================================================
+// Phase 2: Per-User Group Ratio Override APIs
+// ============================================================================
+
+/**
+ * Get all per-group ratio overrides for a user.
+ * Returns: { group_a: 0.8, group_b: 0.9 }
+ */
+export async function getUserGroupRatios(
+  userId: number
+): Promise<ApiResponse<Record<string, number>>> {
+  const res = await api.get(`/api/user/${userId}/group_ratios`)
+  return res.data
+}
+
+/**
+ * Set all per-group ratio overrides for a user (full replacement).
+ * Empty object clears all overrides.
+ */
+export async function setUserGroupRatios(
+  userId: number,
+  ratios: Record<string, number>
+): Promise<ApiResponse<null>> {
+  const res = await api.put(`/api/user/${userId}/group_ratios`, { ratios })
+  return res.data
+}
+
+/**
+ * Delete a single group ratio override.
+ */
+export async function deleteUserGroupRatio(
+  userId: number,
+  group: string
+): Promise<ApiResponse<null>> {
+  const res = await api.delete(
+    `/api/user/${userId}/group_ratios/${encodeURIComponent(group)}`
+  )
+  return res.data
+}
+
+// ============================================================================
+// Phase 3: Per-User Model Price Override APIs
+// ============================================================================
+
+export interface UserModelPrice {
+  user_id: number
+  model_name: string
+  price: number
+  note?: string
+  created_at?: number
+  updated_at?: number
+}
+
+/**
+ * Get all per-model price overrides for a user.
+ */
+export async function getUserModelPrices(
+  userId: number
+): Promise<ApiResponse<UserModelPrice[]>> {
+  const res = await api.get(`/api/user/${userId}/model_prices`)
+  return res.data
+}
+
+/**
+ * Set all per-model price overrides for a user (full replacement).
+ * Empty array clears all overrides.
+ */
+export async function setUserModelPrices(
+  userId: number,
+  prices: Array<{ model_name: string; price: number; note?: string }>
+): Promise<ApiResponse<null>> {
+  const res = await api.put(`/api/user/${userId}/model_prices`, { prices })
+  return res.data
+}
+
+/**
+ * Delete a single model price override.
+ */
+export async function deleteUserModelPrice(
+  userId: number,
+  modelName: string
+): Promise<ApiResponse<null>> {
+  const res = await api.delete(
+    `/api/user/${userId}/model_prices/${encodeURIComponent(modelName)}`
+  )
+  return res.data
+}
+
+/**
+ * Get full pricing table (model -> price/ratio) — used by Phase 3 editor for model dropdown.
+ */
+export interface PricingItem {
+  model_name: string
+  quota_type?: number
+  model_price?: number
+  model_ratio?: number
+  completion_ratio?: number
+  enable_groups?: string[]
+}
+
+export async function getPricing(): Promise<{
+  success: boolean
+  data: PricingItem[]
+}> {
+  const res = await api.get(`/api/pricing`)
+  return res.data
+}

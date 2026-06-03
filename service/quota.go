@@ -115,10 +115,13 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
+	// Phase 2: 完整 3 层倍率查询（用户级 → 用户组级 → 全局）
+	// GetUserGroupRatioWithUser 内部封装了所有 fallback 逻辑。
+	// 用户没配 user-level 覆盖时行为完全等价旧逻辑。
 	actualGroupRatio := groupRatio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
-		actualGroupRatio = userGroupRatio
+	userOverride := GetUserGroupRatioWithUser(relayInfo.UserId, relayInfo.UserGroup, relayInfo.UsingGroup)
+	if userOverride != groupRatio {
+		actualGroupRatio = userOverride
 	}
 
 	quotaInfo := QuotaInfo{

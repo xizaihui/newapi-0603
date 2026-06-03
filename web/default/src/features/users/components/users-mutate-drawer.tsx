@@ -62,6 +62,9 @@ import {
   sideDrawerFormClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { MultiSelect } from '@/components/multi-select'
+import { UserGroupRatioEditor } from './user-group-ratio-editor'
+import { UserModelPriceEditor } from './user-model-price-editor'
 import { createUser, updateUser, getUser, getGroups } from '../api'
 import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
@@ -315,46 +318,67 @@ export function UsersMutateDrawer({
                 />
               </SideDrawerSection>
 
-              {/* Group & Quota Settings (Update only) */}
-              {isUpdate && (
-                <SideDrawerSection>
-                  <h3 className='text-sm font-medium'>{t('Group & Quota')}</h3>
-
-                  <FormField
-                    control={form.control}
-                    name='group'
-                    render={({ field }) => (
+              {/* Usable Groups (always shown — admin assigns one or more groups) */}
+              <SideDrawerSection>
+                <h3 className='text-sm font-medium'>{t('Group')}</h3>
+                <FormField
+                  control={form.control}
+                  name='group'
+                  render={({ field }) => {
+                    const selected = (field.value || '')
+                      .split(',')
+                      .map((g) => g.trim())
+                      .filter(Boolean)
+                    return (
                       <FormItem>
-                        <FormLabel>{t('Group')}</FormLabel>
-                        <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
-                          onValueChange={field.onChange}
-                          value={field.value}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('Select a group')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {groups.map((group) => (
-                                <SelectItem key={group} value={group}>
-                                  {group}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
+                        <FormLabel>{t('Usable Groups')}</FormLabel>
+                        <FormControl>
+                          <MultiSelect
+                            options={groups.map((g) => ({
+                              value: g,
+                              label: g,
+                            }))}
+                            selected={selected}
+                            onChange={(vals) => field.onChange(vals.join(','))}
+                            placeholder={t('Select one or more groups')}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'User can access models from all selected groups. The first group is the primary group.'
+                          )}
+                        </FormDescription>
                         <FormMessage />
                       </FormItem>
-                    )}
+                    )
+                  }}
+                />
+              </SideDrawerSection>
+
+              {/* Phase 2: Per-Group Ratio Overrides (Update only) */}
+              {isUpdate && currentRow && (
+                <SideDrawerSection>
+                  <UserGroupRatioEditor
+                    userId={currentRow.id}
+                    groupOptions={(form.watch('group') || '')
+                      .split(',')
+                      .map((g) => g.trim())
+                      .filter(Boolean)}
                   />
+                </SideDrawerSection>
+              )}
+
+              {/* Phase 3: Per-Model Price Overrides (Update only) */}
+              {isUpdate && currentRow && (
+                <SideDrawerSection>
+                  <UserModelPriceEditor userId={currentRow.id} />
+                </SideDrawerSection>
+              )}
+
+              {/* Quota Settings (Update only) */}
+              {isUpdate && (
+                <SideDrawerSection>
+                  <h3 className='text-sm font-medium'>{t('Quota')}</h3>
 
                   <FormField
                     control={form.control}

@@ -117,6 +117,15 @@ const EditUserModal = (props) => {
       data.quota_amount = Number(
         quotaToDisplayAmount(data.quota || 0).toFixed(6),
       );
+      // 多分组：后端用逗号分隔字符串存储，前端转为数组供 MultiSelect 使用
+      if (typeof data.group === 'string') {
+        data.group = data.group
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+      } else if (!Array.isArray(data.group)) {
+        data.group = [];
+      }
       setInputs({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -150,6 +159,10 @@ const EditUserModal = (props) => {
     let payload = { ...values };
     delete payload.quota;
     delete payload.quota_amount;
+    // 多分组：MultiSelect 输出数组，提交时拼回逗号分隔字符串
+    if (Array.isArray(payload.group)) {
+      payload.group = payload.group.join(',');
+    }
     if (userId) {
       payload.id = parseInt(userId);
     }
@@ -359,11 +372,12 @@ const EditUserModal = (props) => {
                       <Col span={24}>
                         <Form.Select
                           field='group'
-                          label={t('分组')}
+                          label={t('分组（可多选，首个为主分组）')}
                           placeholder={t('请选择分组')}
                           optionList={groupOptions}
+                          multiple
                           allowAdditions
-                          search
+                          filter
                           rules={[{ required: true, message: t('请选择分组') }]}
                         />
                       </Col>

@@ -190,7 +190,9 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 		return modelListGroups{
 			userGroup:   userGroup,
 			tokenGroup:  tokenGroup,
-			ownerGroups: service.GetUserAutoGroup(userGroup),
+			// feat4: multi-group tokens present as "auto" here; span their per-token
+			// group list (falls back to global autoGroups for literal-"auto" tokens).
+			ownerGroups: service.GetEffectiveAutoGroups(c, userGroup),
 		}, nil
 	}
 

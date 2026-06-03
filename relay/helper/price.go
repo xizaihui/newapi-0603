@@ -17,6 +17,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// GetEffectiveModelPrice Phase 3: 先查用户级模型价格覆盖，未命中则走全局
+// 返回 (price, usePrice)；当用户配了覆盖时强制 usePrice=true（按次计费）。
+// modelName 会用 ratio_setting.FormatMatchingModelName 标准化，以兼容 compact 后缀等。
+func GetEffectiveModelPrice(userId int, modelName string) (float64, bool) {
+	if userId > 0 {
+		normalized := ratio_setting.FormatMatchingModelName(modelName)
+		if p, ok := model.LookupUserModelPrice(userId, normalized); ok {
+			return p, true
+		}
+		// 也尝试原始名（防御性，万一调用方已经标准化过）
+		if normalized != modelName {
+			if p, ok := model.LookupUserModelPrice(userId, modelName); ok {
+				return p, true
+			}
+		}
+	}
+	return ratio_setting.GetModelPrice(modelName, false)
+}
+
 func modelPriceNotConfiguredError(modelName string, userId int) error {
 	if model.IsAdmin(userId) {
 		return fmt.Errorf(
@@ -49,9 +68,16 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 		relayInfo.UsingGroup = autoGroup.(string)
 	}
 
-	// check user group special ratio
-	userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup)
-	if ok {
+	// Phase 2: 完整 3 层倍率查询
+	// 1) UserGroupRatio[userId][group] (用户级覆盖)
+	// 2) GroupGroupRatio[userGroup][group] (用户组级覆盖)
+	// 3) GroupRatio[group] (全局)
+	if userOverride, ok := model.LookupUserGroupRatio(relayInfo.UserId, relayInfo.UsingGroup); ok {
+		// user-level override (Phase 2 新增)
+		groupRatioInfo.GroupSpecialRatio = userOverride
+		groupRatioInfo.GroupRatio = userOverride
+		groupRatioInfo.HasSpecialRatio = true
+	} else if userGroupRatio, ok := ratio_setting.GetGroupGroupRatio(relayInfo.UserGroup, relayInfo.UsingGroup); ok {
 		// user group special ratio
 		groupRatioInfo.GroupSpecialRatio = userGroupRatio
 		groupRatioInfo.GroupRatio = userGroupRatio
@@ -65,7 +91,7 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 }
 
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
-	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
+	modelPrice, usePrice := GetEffectiveModelPrice(info.UserId, info.OriginModelName)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
@@ -167,7 +193,7 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 
-	modelPrice, success := ratio_setting.GetModelPrice(info.OriginModelName, true)
+	modelPrice, success := GetEffectiveModelPrice(info.UserId, info.OriginModelName)
 	usePrice := success
 	var modelRatio float64
 

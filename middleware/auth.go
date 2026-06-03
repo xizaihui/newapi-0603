@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -381,13 +382,54 @@ func TokenAuth() func(c *gin.Context) {
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group
-		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+		// feat4: 多分组令牌——token.Group 形如 "default,vip"（逗号分隔）。
+		// 逐个校验子分组是否在用户可用分组内且未被弃用，校验通过后复用既有的
+		// "auto" 跨分组路由机制：把 UsingGroup 置为 "auto"，并把校验后的分组列表
+		// 存入 ContextKeyTokenAutoGroups 供 service.GetEffectiveAutoGroups 使用。
+		// 仅当 token.Group 含逗号时触发；既有单分组 / 字面 "auto" 令牌行为完全不变。
+		// 令牌分组校验（放宽，与上游 / 3006 行为一致）：
+		// 一个令牌分组被视为“可用”的判定标准 =
+		//   1) 用户被显式授权的分组（service.GetUserUsableGroups，Phase 1.5 严格语义），或
+		//   2) 全局 UserUsableGroups 设置里配置的分组——上游语义把全局可用分组视为对所有
+		//      用户开放，管理员可把令牌指定到任意全局分组（例如把某个令牌调到“联调test”）。
+		// 仅放宽“令牌分组”这一处请求期校验；用户侧 UI 的可选分组仍走严格语义不变。
+		usableGroups := service.GetUserUsableGroups(userGroup)
+		globalUsableGroups := setting.GetUserUsableGroupsCopy()
+		tokenGroupUsable := func(g string) bool {
+			if _, ok := usableGroups[g]; ok {
+				return true
+			}
+			_, ok := globalUsableGroups[g]
+			return ok
+		}
+		isMultiGroup := false
+		if tokenGroup != "" && strings.Contains(tokenGroup, ",") {
+			subGroups := service.SplitUserGroups(tokenGroup)
+			validated := make([]string, 0, len(subGroups))
+			for _, g := range subGroups {
+				if !tokenGroupUsable(g) {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", g))
+					return
+				}
+				if !ratio_setting.ContainsGroupRatio(g) {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", g))
+					return
+				}
+				validated = append(validated, g)
+			}
+			if len(validated) == 0 {
+				abortWithOpenAiMessage(c, http.StatusForbidden, "令牌分组无效")
+				return
+			}
+			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, validated)
+			userGroup = "auto"
+			isMultiGroup = true
+		} else if tokenGroup != "" {
+			if !tokenGroupUsable(tokenGroup) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}
-			// check group in common.GroupRatio
+			// 分组必须有倍率配置，否则视为已弃用（auto 例外）
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
 				if tokenGroup != "auto" {
 					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
@@ -401,6 +443,12 @@ func TokenAuth() func(c *gin.Context) {
 		err = SetupContextForToken(c, token, parts...)
 		if err != nil {
 			return
+		}
+		if isMultiGroup {
+			// 让 relay 重试链路（relayInfo.TokenGroup 来自 ContextKeyTokenGroup）也走
+			// "auto" 分支；并强制开启跨分组重试，使一个 key 能透明地跨多个分组取用资源。
+			common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+			common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, true)
 		}
 		c.Next()
 	}

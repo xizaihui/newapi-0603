@@ -187,6 +187,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
 
+	// feat4 priority cooldown: remember the auto-group used by the previous attempt
+	// so we can detect a cross-group failover (A -> B) and put the departed group
+	// into a short cooldown. Stays "" for single-group tokens (ContextKeyAutoGroup
+	// is only set by the "auto" routing machinery).
+	prevAutoGroup := ""
+
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
@@ -194,6 +200,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
 			break
+		}
+
+		// feat4: if the auto machinery just moved to a different group than the
+		// previous attempt used, the previous group's channels were exhausted
+		// without success → cool it down so later requests skip it for a while.
+		curAutoGroup := common.GetContextKeyString(c, constant.ContextKeyAutoGroup)
+		if prevAutoGroup != "" && curAutoGroup != "" && curAutoGroup != prevAutoGroup {
+			service.MarkAutoGroupCooldown(prevAutoGroup, relayInfo.OriginModelName)
 		}
 
 		addUsedChannel(c, channel.Id)
@@ -222,6 +236,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
+			// feat4: this group served the request → clear any cooldown so a
+			// recovered group is preferred again on the next request.
+			if curAutoGroup != "" {
+				service.ClearAutoGroupCooldown(curAutoGroup, relayInfo.OriginModelName)
+			}
 			return
 		}
 
@@ -233,6 +252,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
 		}
+		// feat4: remember the group this (failed, retryable) attempt used so the
+		// next iteration can detect a failover away from it.
+		prevAutoGroup = curAutoGroup
 	}
 
 	useChannel := c.GetStringSlice("use_channel")

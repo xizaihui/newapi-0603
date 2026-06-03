@@ -7,9 +7,52 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
+
+// GetEffectiveAutoGroups returns the group list that the "auto" routing machinery
+// should span for the current request.
+//
+//   - If the token carries a per-token multi-group list (feat4, stored in
+//     ContextKeyTokenAutoGroups by auth.go after validating each subgroup against
+//     the user's usable groups), that exact list is used.
+//   - Otherwise it falls back to GetUserAutoGroup(userGroup), i.e. the global
+//     setting.autoGroups ∩ user usable groups — preserving the original behaviour
+//     of literal-"auto" tokens unchanged.
+func GetEffectiveAutoGroups(c *gin.Context, userGroup string) []string {
+	if c != nil {
+		if v, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups); ok {
+			if groups, ok := v.([]string); ok && len(groups) > 0 {
+				return groups
+			}
+		}
+	}
+	return GetUserAutoGroup(userGroup)
+}
+
+// resolveAutoGroups returns the priority-ordered group list the "auto" machinery
+// should span for THIS request, with groups currently in cooldown filtered out
+// (feat4 circuit breaker, see auto_group_cooldown.go).
+//
+// The result is computed once and cached in ContextKeyAutoGroupResolved, because
+// the retry machinery indexes into this list via ContextKeyAutoGroupIndex: the
+// list must keep the same shape across all retries of a single request, even if a
+// group enters cooldown partway through (a mid-request cooldown only affects
+// FUTURE requests, never the one that triggered it).
+func resolveAutoGroups(c *gin.Context, userGroup, modelName string) []string {
+	if c != nil {
+		if v, ok := common.GetContextKey(c, constant.ContextKeyAutoGroupResolved); ok {
+			if groups, ok := v.([]string); ok {
+				return groups
+			}
+		}
+	}
+	resolved := FilterAvailableAutoGroups(GetEffectiveAutoGroups(c, userGroup), modelName)
+	if c != nil {
+		common.SetContextKey(c, constant.ContextKeyAutoGroupResolved, resolved)
+	}
+	return resolved
+}
 
 type RetryParam struct {
 	Ctx          *gin.Context
@@ -87,10 +130,12 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 
 	if param.TokenGroup == "auto" {
-		if len(setting.GetAutoGroups()) == 0 {
+		// feat4: prefer the per-token multi-group list (if any), else global autoGroups,
+		// then drop any group currently in cooldown (request-stable, see resolveAutoGroups).
+		autoGroups := resolveAutoGroups(param.Ctx, userGroup, param.ModelName)
+		if len(autoGroups) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")
 		}
-		autoGroups := GetUserAutoGroup(userGroup)
 
 		// startGroupIndex: the group index to start searching from
 		// startGroupIndex: 开始搜索的分组索引

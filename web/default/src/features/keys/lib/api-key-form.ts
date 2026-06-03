@@ -108,7 +108,12 @@ export function transformFormDataToPayload(
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
     group: data.group || '',
-    cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
+    // feat4: a multi-group key (comma-separated) always spans its groups via the
+    // "auto" machinery, so persist cross_group_retry=true to match runtime behavior.
+    cross_group_retry:
+      data.group === 'auto'
+        ? !!data.cross_group_retry
+        : (data.group || '').includes(','),
   }
 }
 

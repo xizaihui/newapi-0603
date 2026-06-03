@@ -284,6 +284,11 @@ export function ChannelMutateDrawer({
   const [codexOAuthDialogOpen, setCodexOAuthDialogOpen] = useState(false)
   const [isCodexCredentialRefreshing, setIsCodexCredentialRefreshing] =
     useState(false)
+  // Free-text custom model entry (parity with the classic UI's dedicated
+  // "custom model name" input). The MultiSelect supports inline typing too, but
+  // an explicit labelled input is easier to discover when editing a channel
+  // that already has many model chips.
+  const [customModelDraft, setCustomModelDraft] = useState('')
   const initialModelsRef = useRef<string[]>([])
   const initialModelMappingRef = useRef<string>('')
   const initialStatusCodeMappingRef = useRef<string>('')
@@ -735,6 +740,25 @@ export function ChannelMutateDrawer({
     },
     [currentModelsArray, form]
   )
+
+  // Add one or more custom model names typed into the free-text input. Accepts
+  // comma / newline separated lists, merges + dedupes against current models.
+  const handleAddCustomModels = useCallback(() => {
+    const names = customModelDraft
+      .split(/[,，\n]/)
+      .map((name) => name.trim())
+      .filter(Boolean)
+    if (names.length === 0) return
+    const before = currentModelsArray.length
+    updateModels(names, true)
+    setCustomModelDraft('')
+    const added = new Set([...currentModelsArray, ...names]).size - before
+    if (added > 0) {
+      toast.success(t('Added {{count}} custom model(s)', { count: added }))
+    } else {
+      toast.info(t('Model(s) already in the list'))
+    }
+  }, [customModelDraft, currentModelsArray, updateModels, t])
 
   // Handle fetching models from upstream
   const handleFetchModels = useCallback(async () => {
@@ -2212,6 +2236,48 @@ export function ChannelMutateDrawer({
                             </FormItem>
                           )}
                         />
+
+                        <div className='mt-4 space-y-2'>
+                          <div>
+                            <p className='text-sm font-medium'>
+                              {t('Custom model')}
+                            </p>
+                            <p className='text-muted-foreground text-xs'>
+                              {t(
+                                'Add a model name that is not in the list. Separate multiple names with commas.'
+                              )}
+                            </p>
+                          </div>
+                          <div className='flex gap-2'>
+                            <Input
+                              value={customModelDraft}
+                              onChange={(e) =>
+                                setCustomModelDraft(e.target.value)
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  handleAddCustomModels()
+                                }
+                              }}
+                              placeholder={t(
+                                'e.g. gpt-4o-mini, claude-3-5-sonnet'
+                              )}
+                            />
+                            <Button
+                              type='button'
+                              variant='outline'
+                              onClick={handleAddCustomModels}
+                              disabled={!customModelDraft.trim()}
+                            >
+                              <Plus
+                                className='mr-2 h-4 w-4'
+                                aria-hidden='true'
+                              />
+                              {t('Add')}
+                            </Button>
+                          </div>
+                        </div>
 
                         <Separator className='my-4' />
 

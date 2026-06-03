@@ -79,6 +79,7 @@ import {
   ApiKeyGroupCombobox,
   type ApiKeyGroupOption,
 } from './api-key-group-combobox'
+import { ApiKeyGroupPriorityList } from './api-key-group-priority-list'
 import { useApiKeys } from './api-keys-provider'
 
 type ApiKeyMutateDrawerProps = {
@@ -147,19 +148,29 @@ export function ApiKeysMutateDrawer({
     }
   }, [open, isUpdate, currentRow, form, defaultUseAutoGroup, backendHasAuto])
 
-  // Correct group after groups load: if the form value is not in available groups, fall back
+  // Correct group after groups load: drop any selected group that is no longer
+  // available. Handles the comma-separated multi-group value (feat4) by validating
+  // each part and keeping the valid ones; only falls back when nothing remains.
   useEffect(() => {
     if (groups.length === 0) return
-    const currentGroup = form.getValues('group')
-    if (currentGroup && !groups.some((g) => g.value === currentGroup)) {
+    const currentGroup = form.getValues('group') || ''
+    const parts = currentGroup
+      .split(',')
+      .map((g) => g.trim())
+      .filter(Boolean)
+    if (parts.length === 0) return
+    const validParts = parts.filter((p) => groups.some((g) => g.value === p))
+    if (validParts.length === 0) {
       const fallback =
         groups.find((g) => g.value === 'default')?.value ??
         groups[0]?.value ??
         ''
       form.setValue('group', fallback)
-      if (currentGroup === 'auto') {
+      if (parts.includes('auto')) {
         form.setValue('cross_group_retry', false)
       }
+    } else if (validParts.length !== parts.length) {
+      form.setValue('group', validParts.join(','))
     }
   }, [groups, form])
 
@@ -298,20 +309,40 @@ export function ApiKeysMutateDrawer({
               <FormField
                 control={form.control}
                 name='group'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Group')}</FormLabel>
-                    <FormControl>
-                      <ApiKeyGroupCombobox
-                        options={groups}
-                        value={field.value}
-                        onValueChange={field.onChange}
-                        placeholder={t('Select a group')}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                render={({ field }) => {
+                  const selectedGroups = (field.value || '')
+                    .split(',')
+                    .map((g) => g.trim())
+                    .filter(Boolean)
+                  return (
+                    <FormItem>
+                      <FormLabel>{t('Group')}</FormLabel>
+                      <FormControl>
+                        <ApiKeyGroupCombobox
+                          options={groups}
+                          value={selectedGroups}
+                          onValueChange={(vals) => field.onChange(vals.join(','))}
+                          placeholder={t('Select one or more groups')}
+                        />
+                      </FormControl>
+                      {selectedGroups.length > 1 && (
+                        <>
+                          <ApiKeyGroupPriorityList
+                            value={selectedGroups}
+                            options={groups}
+                            onChange={(vals) => field.onChange(vals.join(','))}
+                          />
+                          <FormDescription>
+                            {t(
+                              'Requests try these groups in priority order (top first), failing over to the next only after a group is exhausted. A group that fails over is skipped for ~10 minutes, then retried automatically — if it recovers it returns to the front.'
+                            )}
+                          </FormDescription>
+                        </>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )
+                }}
               />
 
               {selectedGroup === 'auto' && (

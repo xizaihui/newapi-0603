@@ -201,6 +201,28 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         const group = row.getValue('group') as string
         const ratio = group && group !== 'auto' ? groupRatios[group] : undefined
 
+        // feat4: multi-group key (comma-separated). Render one badge per group
+        // plus a cross-group indicator; each request transparently spans all
+        // listed groups via the "auto" routing machinery.
+        if (group && group.includes(',')) {
+          const groupList = group
+            .split(',')
+            .map((g) => g.trim())
+            .filter(Boolean)
+          return (
+            <span className='inline-flex flex-wrap items-center gap-1.5'>
+              {groupList.map((g) => (
+                <GroupBadge key={g} group={g} ratio={groupRatios[g]} />
+              ))}
+              <StatusBadge
+                label={t('Cross-group')}
+                variant='info'
+                copyable={false}
+              />
+            </span>
+          )
+        }
+
         if (group === 'auto') {
           return (
             <Tooltip>

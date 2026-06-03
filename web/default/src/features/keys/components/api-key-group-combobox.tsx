@@ -45,10 +45,14 @@ export type ApiKeyGroupOption = {
 
 type ApiKeyGroupComboboxProps = {
   options: ApiKeyGroupOption[]
-  value?: string
-  onValueChange: (value: string) => void
+  /** Currently selected group values. A single value = classic single-group key;
+   *  multiple values = feat4 multi-group key (key transparently spans all of them). */
+  value: string[]
+  onValueChange: (value: string[]) => void
   placeholder?: string
   disabled?: boolean
+  /** When the user picks "auto", clear other selections (and vice versa). Default true. */
+  autoExclusive?: boolean
 }
 
 function formatGroupRatio(
@@ -101,11 +105,22 @@ export function ApiKeyGroupCombobox({
   onValueChange,
   placeholder,
   disabled,
+  autoExclusive = true,
 }: ApiKeyGroupComboboxProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const [searchValue, setSearchValue] = useState('')
-  const selectedOption = options.find((option) => option.value === value)
+  const selectedValues = value ?? []
+  const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues])
+  const selectedOptions = useMemo(
+    () =>
+      selectedValues.map(
+        (v) =>
+          options.find((option) => option.value === v) ??
+          ({ value: v, label: v } as ApiKeyGroupOption)
+      ),
+    [selectedValues, options]
+  )
 
   const filteredOptions = useMemo(() => {
     const search = searchValue.trim().toLowerCase()
@@ -122,10 +137,23 @@ export function ApiKeyGroupCombobox({
     })
   }, [options, searchValue])
 
-  const handleSelect = (selectedValue: string) => {
-    onValueChange(selectedValue)
-    setOpen(false)
-    setSearchValue('')
+  const toggleValue = (selectedValue: string) => {
+    let next: string[]
+    if (selectedSet.has(selectedValue)) {
+      next = selectedValues.filter((v) => v !== selectedValue)
+    } else {
+      next = [...selectedValues, selectedValue]
+    }
+    if (autoExclusive) {
+      if (selectedValue === 'auto' && !selectedSet.has('auto')) {
+        // Just added "auto" → it is exclusive, drop everything else.
+        next = ['auto']
+      } else if (selectedValue !== 'auto' && next.includes('auto')) {
+        // Added a concrete group while "auto" was selected → drop "auto".
+        next = next.filter((v) => v !== 'auto')
+      }
+    }
+    onValueChange(next)
   }
 
   return (
@@ -143,19 +171,28 @@ export function ApiKeyGroupCombobox({
         }
       >
         <span className='flex min-w-0 flex-1 items-center justify-between gap-2 sm:gap-3'>
-          <span className='min-w-0'>
-            <span className='block truncate font-medium'>
-              {selectedOption?.label || placeholder || t('Select a group')}
-            </span>
-            {selectedOption?.desc && (
-              <span className='text-muted-foreground block truncate text-[11px] sm:text-xs'>
-                {selectedOption.desc}
+          <span className='flex min-w-0 flex-1 flex-wrap items-center gap-1.5'>
+            {selectedOptions.length === 0 ? (
+              <span className='text-muted-foreground block truncate font-medium'>
+                {placeholder || t('Select one or more groups')}
               </span>
+            ) : (
+              selectedOptions.map((option) => (
+                <Badge
+                  key={option.value}
+                  variant='secondary'
+                  className='max-w-[10rem] truncate text-xs font-medium'
+                >
+                  <span className='truncate'>{option.label}</span>
+                </Badge>
+              ))
             )}
           </span>
-          <span className='hidden sm:block'>
-            <GroupRatioBadge ratio={selectedOption?.ratio} />
-          </span>
+          {selectedOptions.length === 1 && (
+            <span className='hidden sm:block'>
+              <GroupRatioBadge ratio={selectedOptions[0].ratio} />
+            </span>
+          )}
         </span>
         <ChevronsUpDown className='h-4 w-4 shrink-0 opacity-50' />
       </PopoverTrigger>
@@ -178,13 +215,15 @@ export function ApiKeyGroupCombobox({
                 <CommandItem
                   key={option.value}
                   value={option.value}
-                  onSelect={() => handleSelect(option.value)}
+                  onSelect={() => toggleValue(option.value)}
                   className='data-[selected=true]:bg-muted items-start gap-3 rounded-lg px-3 py-3 transition-colors'
                 >
                   <Check
                     className={cn(
                       'mt-0.5 h-4 w-4',
-                      value === option.value ? 'opacity-100' : 'opacity-0'
+                      selectedSet.has(option.value)
+                        ? 'opacity-100'
+                        : 'opacity-0'
                     )}
                   />
                   <span className='min-w-0 flex-1'>

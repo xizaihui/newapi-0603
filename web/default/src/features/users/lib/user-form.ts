@@ -31,6 +31,7 @@ export const userFormSchema = z.object({
   password: z.string().optional(),
   role: z.number().optional(),
   quota_dollars: z.number().min(0).optional(),
+  // 多分组逗号分隔字符串：例如 'default,vip'；UI 层用 MultiSelect 拆/合
   group: z.string().optional(),
   remark: z.string().optional(),
 })
@@ -71,6 +72,10 @@ export function transformFormDataToPayload(
   // For create: only send required fields
   if (userId === undefined) {
     payload.role = data.role || 1 // Default to common user
+    // feat (2026-05-22): 允许管理员在创建用户时指定可用分组（逗号分隔，多分组授权）
+    if (data.group && data.group.trim()) {
+      payload.group = data.group
+    }
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.group = data.group

@@ -104,10 +104,18 @@ const renderGroupColumn = (text, record, t, groupRatios = {}) => {
       </Tooltip>
     );
   }
-  const ratio = groupRatios[text];
+  // feat4 多分组令牌：text 形如 "default,vip"，renderGroup 已按逗号拆分为多个标签；
+  // 此处补充跨分组提示，与单分组 auto 的展示保持一致。
+  const isMultiGroup = typeof text === 'string' && text.includes(',');
+  const ratio = isMultiGroup ? undefined : groupRatios[text];
   return (
     <span className='flex items-center gap-1'>
       {renderGroup(text)}
+      {isMultiGroup && record && record.cross_group_retry && (
+        <Tag size='small' color='white' shape='circle'>
+          {t('跨分组')}
+        </Tag>
+      )}
       {ratio !== undefined && (
         <Tag size='small' color='green' shape='circle'>
           {ratio}x
