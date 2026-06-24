@@ -274,6 +274,13 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 	}
 }
 
+func setupTokenAutoGroups(c *gin.Context, groups []string) {
+	common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, groups)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, "auto")
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "auto")
+	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, true)
+}
+
 func TokenAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// 先检测是否为ws
@@ -380,7 +387,9 @@ func TokenAuth() func(c *gin.Context) {
 
 		userCache.WriteContext(c)
 
-		userGroup := userCache.Group
+		fullUserGroup := userCache.Group
+		userGroups := service.SplitUserGroups(fullUserGroup)
+		userGroup := service.GetUserPrimaryGroup(fullUserGroup)
 		tokenGroup := token.Group
 		// feat4: 多分组令牌——token.Group 形如 "default,vip"（逗号分隔）。
 		// 逐个校验子分组是否在用户可用分组内且未被弃用，校验通过后复用既有的
@@ -393,7 +402,7 @@ func TokenAuth() func(c *gin.Context) {
 		//   2) 全局 UserUsableGroups 设置里配置的分组——上游语义把全局可用分组视为对所有
 		//      用户开放，管理员可把令牌指定到任意全局分组（例如把某个令牌调到“联调test”）。
 		// 仅放宽“令牌分组”这一处请求期校验；用户侧 UI 的可选分组仍走严格语义不变。
-		usableGroups := service.GetUserUsableGroups(userGroup)
+		usableGroups := service.GetUserUsableGroups(fullUserGroup)
 		globalUsableGroups := setting.GetUserUsableGroupsCopy()
 		tokenGroupUsable := func(g string) bool {
 			if _, ok := usableGroups[g]; ok {
@@ -421,9 +430,9 @@ func TokenAuth() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, "令牌分组无效")
 				return
 			}
-			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, validated)
-			userGroup = "auto"
+			setupTokenAutoGroups(c, validated)
 			isMultiGroup = true
+			userGroup = "auto"
 		} else if tokenGroup != "" {
 			if !tokenGroupUsable(tokenGroup) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
@@ -437,6 +446,10 @@ func TokenAuth() func(c *gin.Context) {
 				}
 			}
 			userGroup = tokenGroup
+		} else if len(userGroups) > 1 {
+			setupTokenAutoGroups(c, userGroups)
+			isMultiGroup = true
+			userGroup = "auto"
 		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, userGroup)
 
