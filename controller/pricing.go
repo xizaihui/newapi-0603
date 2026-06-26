@@ -43,14 +43,26 @@ func GetPricing(c *gin.Context) {
 	}
 	var group string
 	isAdmin := false
+	uid := 0
+	// 登录用户的「专属分组倍率」覆盖表（一次性取出，避免逐分组查库）
+	var userGroupRatioMap map[string]float64
 	if exists {
-		user, err := model.GetUserCache(userId.(int))
+		uid = userId.(int)
+		user, err := model.GetUserCache(uid)
 		if err == nil {
 			group = user.Group
 			isAdmin = c.GetInt("role") >= common.RoleAdminUser
+			userGroupRatioMap, _ = model.GetUserGroupRatioCached(uid)
+			// 价格展示必须与计费链路 (relay/helper.HandleGroupRatio) 完全一致，
+			// 分组倍率优先级：UserGroupRatio[uid][g]（专属分组倍率）
+			//   > GroupGroupRatio[userGroup][g]（用户组级覆盖）
+			//   > 全局 GroupRatio[g]
 			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
+				if r, ok := userGroupRatioMap[g]; ok {
+					groupRatio[g] = r
+					continue
+				}
+				if ratio, ok := ratio_setting.GetGroupGroupRatio(group, g); ok {
 					groupRatio[g] = ratio
 				}
 			}
@@ -71,6 +83,29 @@ func GetPricing(c *gin.Context) {
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)
+		}
+	}
+
+	// 应用「专属模型倍率」（用户级按次价格覆盖），与计费链路 relay/helper.GetEffectiveModelPrice 一致。
+	// filterPricingByUsableGroups 已返回结构体副本，可安全就地修改，不会污染全局 pricing 缓存。
+	if uid > 0 {
+		if priceMap, err := model.GetUserModelPriceCached(uid); err == nil && len(priceMap) > 0 {
+			for i := range pricing {
+				name := pricing[i].ModelName
+				normalized := ratio_setting.FormatMatchingModelName(name)
+				price, ok := priceMap[normalized]
+				if !ok && normalized != name {
+					price, ok = priceMap[name]
+				}
+				if ok {
+					// 用户专属为按次价格：切换为按次计费展示，并清空按量倍率，
+					// 与全局按次价格模型在 model/pricing.go 中的表示保持一致。
+					pricing[i].ModelPrice = price
+					pricing[i].QuotaType = 1
+					pricing[i].ModelRatio = 0
+					pricing[i].CompletionRatio = 0
+				}
+			}
 		}
 	}
 

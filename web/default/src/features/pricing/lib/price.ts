@@ -205,9 +205,14 @@ export function formatGroupPrice(
   showWithRecharge = false,
   priceRate = 1,
   usdExchangeRate = 1,
-  groupRatio: Record<string, number>
+  groupRatio: Record<string, number>,
+  billingModeOverride?: 'per_token' | 'per_call'
 ): string {
-  if (model.quota_type === QUOTA_TYPE_VALUES.REQUEST) {
+  // 方案A: 当存在分组级计费模式覆盖时，以该模式为准；否则回退到模型级 quota_type。
+  const effectiveMode =
+    billingModeOverride ??
+    (model.quota_type === QUOTA_TYPE_VALUES.REQUEST ? 'per_call' : 'per_token')
+  if (effectiveMode !== 'per_token') {
     return '-'
   }
 
@@ -238,14 +243,19 @@ export function formatFixedPrice(
   showWithRecharge = false,
   priceRate = 1,
   usdExchangeRate = 1,
-  groupRatio: Record<string, number>
+  groupRatio: Record<string, number>,
+  billingModeOverride?: 'per_token' | 'per_call'
 ): string {
-  if (model.quota_type !== QUOTA_TYPE_VALUES.REQUEST) {
+  // 方案A: 当存在分组级计费模式覆盖时，以该模式为准；否则回退到模型级 quota_type。
+  const effectiveMode =
+    billingModeOverride ??
+    (model.quota_type === QUOTA_TYPE_VALUES.REQUEST ? 'per_call' : 'per_token')
+  if (effectiveMode !== 'per_call') {
     return '-'
   }
 
-  const ratio = groupRatio[group] || 1
-  let priceInUSD = (model.model_price || 0) * ratio
+  // 按次计费价格为最终价，不受分组倍率影响（分组倍率只作用于按 token 计费模型）。
+  let priceInUSD = model.model_price || 0
 
   priceInUSD = applyRechargeRate(
     priceInUSD,
@@ -274,13 +284,8 @@ export function formatRequestPrice(
     return '-'
   }
 
-  const enableGroups = Array.isArray(model.enable_groups)
-    ? model.enable_groups
-    : []
-  const groupRatio = model.group_ratio || {}
-  const minRatio = getMinGroupRatio(enableGroups, groupRatio)
-
-  let priceInUSD = (model.model_price || 0) * minRatio
+  // 按次计费价格为最终价，不受分组倍率影响（分组倍率只作用于按 token 计费模型）。
+  let priceInUSD = model.model_price || 0
 
   priceInUSD = applyRechargeRate(
     priceInUSD,

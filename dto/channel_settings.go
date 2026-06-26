@@ -1,5 +1,13 @@
 package dto
 
+// Channel-level billing mode override (方案A)：
+// 让"服务该请求的渠道"决定某模型按量(per_token)还是按次(per_call)计费，
+// 避免全局"按次价格优先级高于按量"的规则把按量价格覆盖掉。
+const (
+	ChannelBillingModePerToken = "per_token" // 强制按 token 量计费（使用模型倍率）
+	ChannelBillingModePerCall  = "per_call"  // 强制按次计费（使用模型按次价格）
+)
+
 type ChannelSettings struct {
 	ForceFormat            bool   `json:"force_format,omitempty"`
 	ThinkingToContent      bool   `json:"thinking_to_content,omitempty"`
@@ -7,6 +15,9 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	// BillingModeOverride: 模型名 -> "per_token" | "per_call"。
+	// 命中时覆盖该渠道下指定模型的计费模式；未命中或留空则沿用全局规则。
+	BillingModeOverride map[string]string `json:"billing_mode_override,omitempty"`
 }
 
 type VertexKeyType string

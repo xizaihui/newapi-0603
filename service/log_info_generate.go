@@ -41,7 +41,14 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["completion_ratio"] = completionRatio
 	other["cache_tokens"] = cacheTokens
 	other["cache_ratio"] = cacheRatio
-	other["model_price"] = modelPrice
+	// 按真实计费模式写入 model_price：按 token 计费时写 0，避免日志详情/列表把
+	// “被渠道级 BillingModeOverride 覆盖为按 token” 的请求误判为按次
+	// （前端以 other.model_price > 0 判定按次计费）。
+	if relayInfo != nil && relayInfo.PriceData.UsePrice {
+		other["model_price"] = modelPrice
+	} else {
+		other["model_price"] = 0.0
+	}
 	other["user_group_ratio"] = userGroupRatio
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if relayInfo.ReasoningEffort != "" {

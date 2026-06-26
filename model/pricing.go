@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -35,7 +36,11 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
-	PricingVersion         string                  `json:"pricing_version,omitempty"`
+	// GroupBillingModes: 分组名 -> "per_token" | "per_call"。
+	// 仅当模型在不同分组下计费模式不一致(由渠道级 BillingModeOverride/方案A 造成)时才返回；
+	// 为空表示该模型计费模式统一，前端沿用 QuotaType。
+	GroupBillingModes map[string]string `json:"group_billing_modes,omitempty"`
+	PricingVersion    string            `json:"pricing_version,omitempty"`
 }
 
 type PricingVendor struct {
@@ -199,6 +204,26 @@ func updatePricing() {
 		groups.Add(ability.Group)
 	}
 
+	// 方案A: 收集每个 (模型, 分组) 下各服务渠道对该模型的计费模式覆盖。
+	// modelGroupRawOverrides[model][group] = 各渠道的覆盖值切片("" 表示该渠道沿用全局模式)。
+	// 渠道设置仅按 channel_id 解析一次，避免重复反序列化。
+	channelOverrideCache := make(map[int]map[string]string)
+	modelGroupRawOverrides := make(map[string]map[string][]string)
+	for _, ability := range enableAbilities {
+		override, cached := channelOverrideCache[ability.ChannelId]
+		if !cached {
+			override = parseChannelBillingOverride(ability.ChannelSetting)
+			channelOverrideCache[ability.ChannelId] = override
+		}
+		mode := lookupChannelBillingMode(override, ability.Model)
+		groupMap, ok := modelGroupRawOverrides[ability.Model]
+		if !ok {
+			groupMap = make(map[string][]string)
+			modelGroupRawOverrides[ability.Model] = groupMap
+		}
+		groupMap[ability.Group] = append(groupMap[ability.Group], mode)
+	}
+
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 
@@ -314,6 +339,18 @@ func updatePricing() {
 			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
 			pricing.QuotaType = 0
 		}
+
+		// 方案A: 分组级计费模式(渠道级 BillingModeOverride 在“分组”维度的体现)。
+		// 仅当模型存在跨分组的计费模式差异时填充，前端据此按分组分别展示按次/按 token。
+		if groupModes := resolveGroupBillingModes(pricing.EnableGroup, findPrice, modelGroupRawOverrides[model]); len(groupModes) > 0 {
+			pricing.GroupBillingModes = groupModes
+			// 全局按次但部分分组被覆盖为按 token：补充模型倍率，供按 token 分组计算价格。
+			if findPrice && pricing.ModelRatio == 0 {
+				modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+				pricing.ModelRatio = modelRatio
+				pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			}
+		}
 		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
 			pricing.CacheRatio = &cacheRatio
 		}
@@ -361,4 +398,96 @@ func updatePricing() {
 // GetSupportedEndpointMap 返回全局端点到路径的映射
 func GetSupportedEndpointMap() map[string]common.EndpointInfo {
 	return supportedEndpointMap
+}
+
+// parseChannelBillingOverride 从渠道额外设置(JSON)中解析 BillingModeOverride(方案A)。
+func parseChannelBillingOverride(settingStr string) map[string]string {
+	if strings.TrimSpace(settingStr) == "" {
+		return nil
+	}
+	var cs dto.ChannelSettings
+	if err := common.Unmarshal([]byte(settingStr), &cs); err != nil {
+		return nil
+	}
+	return cs.BillingModeOverride
+}
+
+// lookupChannelBillingMode 在某渠道的覆盖表中查指定模型的计费模式(含规范化模型名兜底)，
+// 返回 "" / per_token / per_call，与 relay/helper.resolveChannelBillingModeOverride 保持一致。
+func lookupChannelBillingMode(override map[string]string, model string) string {
+	if len(override) == 0 {
+		return ""
+	}
+	if mode, ok := override[model]; ok {
+		return normalizePricingBillingMode(mode)
+	}
+	if normalized := ratio_setting.FormatMatchingModelName(model); normalized != model {
+		if mode, ok := override[normalized]; ok {
+			return normalizePricingBillingMode(mode)
+		}
+	}
+	return ""
+}
+
+func normalizePricingBillingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case dto.ChannelBillingModePerToken:
+		return dto.ChannelBillingModePerToken
+	case dto.ChannelBillingModePerCall:
+		return dto.ChannelBillingModePerCall
+	default:
+		return ""
+	}
+}
+
+// resolveGroupBillingModes 计算模型每个分组的有效计费模式。
+// 返回非空映射当且仅当存在分组与全局计费模式不一致；否则返回 nil(计费模式统一，前端沿用 QuotaType)。
+func resolveGroupBillingModes(groups []string, findPrice bool, rawOverrides map[string][]string) map[string]string {
+	globalMode := dto.ChannelBillingModePerToken
+	if findPrice {
+		globalMode = dto.ChannelBillingModePerCall
+	}
+	result := make(map[string]string, len(groups))
+	differs := false
+	for _, g := range groups {
+		var perChannel []string
+		if rawOverrides != nil {
+			perChannel = rawOverrides[g]
+		}
+		eff := resolveSingleGroupMode(perChannel, globalMode, findPrice)
+		result[g] = eff
+		if eff != globalMode {
+			differs = true
+		}
+	}
+	if !differs {
+		return nil
+	}
+	return result
+}
+
+// resolveSingleGroupMode 由某分组下各服务渠道的覆盖值推导该分组的有效计费模式。
+func resolveSingleGroupMode(perChannel []string, globalMode string, findPrice bool) string {
+	if len(perChannel) == 0 {
+		return globalMode
+	}
+	seen := make(map[string]struct{})
+	for _, o := range perChannel {
+		eff := o
+		// per_call 覆盖仅在模型存在按次价格时成立(与 relay/helper.ModelPriceHelper 一致)，否则沿用全局。
+		if eff == dto.ChannelBillingModePerCall && !findPrice {
+			eff = ""
+		}
+		if eff == "" {
+			eff = globalMode
+		}
+		seen[eff] = struct{}{}
+	}
+	if len(seen) == 1 {
+		for k := range seen {
+			return k
+		}
+	}
+	// 同一分组内多个渠道计费模式不一致(用户应避免)：回退全局模式以保证展示稳定。
+	return globalMode
 }

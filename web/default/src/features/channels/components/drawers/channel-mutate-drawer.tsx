@@ -3317,6 +3317,31 @@ export function ChannelMutateDrawer({
                         )}
                       />
 
+                      <FormField
+                        control={form.control}
+                        name='billing_mode_override'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Billing Mode Override')}</FormLabel>
+                            <FormControl>
+                              <Textarea
+                                placeholder={
+                                  '{\n  "gpt-image-2": "per_token"\n}'
+                                }
+                                rows={3}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Per-model billing mode for this channel as JSON (model name to "per_token" or "per_call"). Overrides the global rule where per-call price takes priority over per-token pricing.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
                       {MODEL_FETCHABLE_TYPES.has(currentType) && (
                         <div className='border-border/60 flex flex-col gap-3 border-y py-4'>
                           <SubHeading

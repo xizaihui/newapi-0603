@@ -53,6 +53,13 @@ export type PricingModel = {
   billing_mode?: string
   /** Raw expression describing dynamic / tiered billing */
   billing_expr?: string
+  /**
+   * Per-group billing mode override (方案A). Maps group name to
+   * "per_token" | "per_call". Only present when a model bills differently
+   * across groups (due to channel-level BillingModeOverride); absent means the
+   * model's billing mode is uniform and {@link quota_type} applies to all groups.
+   */
+  group_billing_modes?: Record<string, string>
   /** Pricing version returned by backend, useful for cache busting */
   pricing_version?: string
   /**

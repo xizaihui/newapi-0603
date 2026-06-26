@@ -610,6 +610,28 @@ function GroupPricingSection(props: {
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
 
+  // 方案A: 分组级计费模式。后端在不同分组的计费方式不一致时下发 group_billing_modes
+  // (分组名 -> 'per_token' | 'per_call')；缺省表示全模型统一按 quota_type 计费。
+  const groupBillingModes = props.model.group_billing_modes
+  const resolveGroupMode = (group: string): 'per_token' | 'per_call' => {
+    const mode = groupBillingModes?.[group]
+    if (mode === 'per_token' || mode === 'per_call') return mode
+    return isTokenBased ? 'per_token' : 'per_call'
+  }
+  // 严格按“管理员分配给当前用户的分组”展示：availableGroups = usableGroup ∩ enable_groups，
+  // 分配几个显示几个；不再因 group_billing_modes 而补充用户无权使用的其它分组(如未分配的 vip)。
+  const displayGroups = availableGroups
+  // 计费列/价格列按“已展示分组的实际计费模式”动态决定：
+  //   任一展示分组按 token -> 显示 输入/输出 等 token 列；
+  //   任一展示分组按次     -> 显示 价格 列；
+  //   两种模式并存(混合)   -> 额外显示“计费方式”列加以区分。
+  const displayedModes = displayGroups.map((g) => resolveGroupMode(g))
+  const hasPerTokenGroup = displayedModes.some((m) => m === 'per_token')
+  const hasPerCallGroup = displayedModes.some((m) => m === 'per_call')
+  const hasMixedBilling = hasPerTokenGroup && hasPerCallGroup
+  const showTokenColumns = hasPerTokenGroup
+  const showPriceColumn = hasPerCallGroup
+
   const extraPriceTypes = useMemo(() => {
     const types: { label: string; type: PriceType }[] = []
     if (props.model.cache_ratio != null)
@@ -777,7 +799,10 @@ function GroupPricingSection(props: {
             <TableRow className='hover:bg-transparent'>
               <TableHead className={thClass}>{t('Group')}</TableHead>
               <TableHead className={thClass}>{t('Ratio')}</TableHead>
-              {isTokenBased ? (
+              {hasMixedBilling && (
+                <TableHead className={thClass}>{t('Billing Mode')}</TableHead>
+              )}
+              {showTokenColumns && (
                 <>
                   <TableHead className={`${thClass} text-right`}>
                     {t('Input')}
@@ -794,7 +819,8 @@ function GroupPricingSection(props: {
                     </TableHead>
                   ))}
                 </>
-              ) : (
+              )}
+              {showPriceColumn && (
                 <TableHead className={`${thClass} text-right`}>
                   {t('Price')}
                 </TableHead>
@@ -802,8 +828,9 @@ function GroupPricingSection(props: {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {availableGroups.map((group) => {
+            {displayGroups.map((group) => {
               const ratio = props.groupRatio[group] || 1
+              const groupMode = resolveGroupMode(group)
               return (
                 <TableRow key={group}>
                   <TableCell className='py-2.5'>
@@ -812,7 +839,22 @@ function GroupPricingSection(props: {
                   <TableCell className='text-muted-foreground py-2.5 font-mono'>
                     {ratio}x
                   </TableCell>
-                  {isTokenBased ? (
+                  {hasMixedBilling && (
+                    <TableCell className='py-2.5'>
+                      <span
+                        className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          groupMode === 'per_call'
+                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
+                            : 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+                        }`}
+                      >
+                        {groupMode === 'per_call'
+                          ? t('Per-call')
+                          : t('Per-token')}
+                      </span>
+                    </TableCell>
+                  )}
+                  {showTokenColumns && (
                     <>
                       <TableCell className='py-2.5 text-right font-mono'>
                         {formatGroupPrice(
@@ -823,7 +865,8 @@ function GroupPricingSection(props: {
                           showRechargePrice,
                           props.priceRate,
                           props.usdExchangeRate,
-                          props.groupRatio
+                          props.groupRatio,
+                          groupMode
                         )}
                       </TableCell>
                       <TableCell className='py-2.5 text-right font-mono'>
@@ -835,7 +878,8 @@ function GroupPricingSection(props: {
                           showRechargePrice,
                           props.priceRate,
                           props.usdExchangeRate,
-                          props.groupRatio
+                          props.groupRatio,
+                          groupMode
                         )}
                       </TableCell>
                       {extraPriceTypes.map((ep) => (
@@ -851,12 +895,14 @@ function GroupPricingSection(props: {
                             showRechargePrice,
                             props.priceRate,
                             props.usdExchangeRate,
-                            props.groupRatio
+                            props.groupRatio,
+                            groupMode
                           )}
                         </TableCell>
                       ))}
                     </>
-                  ) : (
+                  )}
+                  {showPriceColumn && (
                     <TableCell className='py-2.5 text-right font-mono'>
                       {formatFixedPrice(
                         props.model,
@@ -864,7 +910,8 @@ function GroupPricingSection(props: {
                         showRechargePrice,
                         props.priceRate,
                         props.usdExchangeRate,
-                        props.groupRatio
+                        props.groupRatio,
+                        groupMode
                       )}
                     </TableCell>
                   )}
@@ -873,7 +920,7 @@ function GroupPricingSection(props: {
             })}
           </TableBody>
         </Table>
-        {isTokenBased && (
+        {showTokenColumns && (
           <p className='text-muted-foreground/40 mt-1.5 px-4 text-[10px] sm:px-0'>
             {t('Prices shown per')} {tokenUnitLabel} tokens
           </p>

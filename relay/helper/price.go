@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -34,6 +36,44 @@ func GetEffectiveModelPrice(userId int, modelName string) (float64, bool) {
 		}
 	}
 	return ratio_setting.GetModelPrice(modelName, false)
+}
+
+// resolveChannelBillingModeOverride 方案A：读取"服务该请求的渠道"为指定模型配置的计费模式覆盖。
+// 返回 "" / dto.ChannelBillingModePerToken / dto.ChannelBillingModePerCall。
+//
+// 注意：此函数在 ModelPriceHelper 中调用，而 RelayInfo.ChannelMeta 在该时点尚未初始化
+// （InitChannelMeta 在 relayHandler 内部才执行），因此渠道设置必须从 gin.Context 读取——
+// 该 key 由 distributor 在选定渠道时通过 SetupContextForSelectedChannel 写入，
+// 重试切换渠道时也会随之更新，保证读到的是"当前服务该请求的渠道"。
+func resolveChannelBillingModeOverride(c *gin.Context, modelName string) string {
+	if c == nil {
+		return ""
+	}
+	channelSetting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	if !ok || len(channelSetting.BillingModeOverride) == 0 {
+		return ""
+	}
+	if mode, ok := channelSetting.BillingModeOverride[modelName]; ok {
+		return normalizeChannelBillingMode(mode)
+	}
+	// 兼容带参数模型名（如 thinking budget、gizmo 等）的规范化匹配
+	if normalized := ratio_setting.FormatMatchingModelName(modelName); normalized != modelName {
+		if mode, ok := channelSetting.BillingModeOverride[normalized]; ok {
+			return normalizeChannelBillingMode(mode)
+		}
+	}
+	return ""
+}
+
+func normalizeChannelBillingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case dto.ChannelBillingModePerToken:
+		return dto.ChannelBillingModePerToken
+	case dto.ChannelBillingModePerCall:
+		return dto.ChannelBillingModePerCall
+	default:
+		return ""
+	}
 }
 
 func modelPriceNotConfiguredError(modelName string, userId int) error {
@@ -93,6 +133,23 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (types.PriceData, error) {
 	modelPrice, usePrice := GetEffectiveModelPrice(info.UserId, info.OriginModelName)
 
+	// 方案A：渠道级计费模式覆盖。全局规则下，配置了按次价格的模型一律按次，会盖掉按量价格；
+	// 此处允许"服务该请求的渠道"为指定模型强制按量(per_token)或按次(per_call)。
+	switch resolveChannelBillingModeOverride(c, info.OriginModelName) {
+	case dto.ChannelBillingModePerToken:
+		// 强制按量：忽略全局/用户级按次价格，走模型倍率计费。
+		// 前置条件：该模型需配置模型倍率，否则后续按现有逻辑报"倍率未配置"。
+		usePrice = false
+	case dto.ChannelBillingModePerCall:
+		// 强制按次：仅在存在可用按次价格时生效（无价格无法按次，保持按量）。
+		if !usePrice {
+			if p, ok := ratio_setting.GetModelPrice(info.OriginModelName, false); ok {
+				modelPrice = p
+				usePrice = true
+			}
+		}
+	}
+
 	groupRatioInfo := HandleGroupRatio(c, info)
 
 	// Check if this model uses tiered_expr billing
@@ -143,22 +200,22 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		// 按次计费：模型按次价格为最终价，不乘分组倍率（分组倍率只作用于按 token 计费）。
+		preConsumedQuota = int(modelPrice * common.QuotaPerUnit)
 	}
 
 	// check if free model pre-consume is disabled
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 		// if model price or ratio is 0, do not pre-consume quota
-		if groupRatioInfo.GroupRatio == 0 {
-			preConsumedQuota = 0
-			freeModel = true
-		} else if usePrice {
+		if usePrice {
+			// 按次计费不受分组倍率影响，仅当按次价格为 0 时视为免费。
 			if modelPrice == 0 {
 				preConsumedQuota = 0
 				freeModel = true
 			}
 		} else {
-			if modelRatio == 0 {
+			// 按 token 计费：分组倍率或模型倍率为 0 时免费。
+			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
 				preConsumedQuota = 0
 				freeModel = true
 			}
@@ -220,9 +277,10 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	freeModel := false
 
 	if usePrice {
-		quota = int(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+		// 按次计费不乘分组倍率（分组倍率只作用于按 token 计费）。
+		quota = int(modelPrice * common.QuotaPerUnit)
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
-			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
+			if modelPrice == 0 {
 				quota = 0
 				freeModel = true
 			}
