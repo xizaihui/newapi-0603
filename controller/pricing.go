@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -98,12 +99,27 @@ func GetPricing(c *gin.Context) {
 					price, ok = priceMap[name]
 				}
 				if ok {
-					// 用户专属为按次价格：切换为按次计费展示，并清空按量倍率，
-					// 与全局按次价格模型在 model/pricing.go 中的表示保持一致。
+					// 用户专属为按次价格：切换为按次计费展示。
 					pricing[i].ModelPrice = price
 					pricing[i].QuotaType = 1
-					pricing[i].ModelRatio = 0
-					pricing[i].CompletionRatio = 0
+					// 仅当该模型不存在「按 token」分组时才清空按量倍率，使其与全局按次价格
+					// 模型在 model/pricing.go 中的表示保持一致。
+					// 方案A 渠道级覆盖可能使部分分组按 token 计费(group_billing_modes 含 per_token)，
+					// 且渠道级 per_token 覆盖在计费链路中优先于用户专属按次价格
+					// (见 relay/helper.ModelPriceHelper：override=per_token 时 usePrice=false)，
+					// 这些分组实际仍按 model_ratio 计费，必须保留 model_ratio/completion_ratio，
+					// 否则前端按 token 分组价格会显示为 $0。
+					hasPerTokenGroup := false
+					for _, mode := range pricing[i].GroupBillingModes {
+						if mode == dto.ChannelBillingModePerToken {
+							hasPerTokenGroup = true
+							break
+						}
+					}
+					if !hasPerTokenGroup {
+						pricing[i].ModelRatio = 0
+						pricing[i].CompletionRatio = 0
+					}
 				}
 			}
 		}
